@@ -1,0 +1,37 @@
+There are 887379 rows and 74 columns in the data
+
+Printing number of categories in each variable to see which one I can make dummies of
+Index(['desc', 'verification_status_joint'], dtype='object')
+term (2,) object
+grade (7,) object
+sub_grade (35,) object
+emp_title (299273,) object
+emp_length (12,) object
+home_ownership (6,) object
+verification_status (3,) object
+issue_d (103,) object
+loan_status (10,) object
+pymnt_plan (2,) object
+url (887379,) object
+desc (124471,) object
+purpose (14,) object
+title (63146,) object
+zip_code (935,) object
+addr_state (51,) object
+earliest_cr_line (698,) object
+initial_list_status (2,) object
+last_pymnt_d (99,) object
+next_pymnt_d (101,) object
+last_credit_pull_d (104,) object
+application_type (2,) object
+verification_status_joint (4,) object
+maybe_consolidation (3,) object
+
+There are 887379 rows and 193 columns in the data set after feature extraction
+The share of unpaid loans is ~6.6%
+
+The AUC of the ROC of the XGB model is 0.97
+The precision of the XGB model is 1.0
+The recall of the XGB model is 0.75
+
+

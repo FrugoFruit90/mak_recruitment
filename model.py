@@ -3,23 +3,19 @@ import numpy as np
 import xgboost as xgb
 import os
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score, precision_score, recall_score
+from sklearn.metrics import roc_auc_score, precision_score, recall_score, roc_curve
 from sklearn.preprocessing import StandardScaler
 import keras
 from keras.constraints import maxnorm
-from keras.regularizers import l1l2
+from keras.regularizers import l1_l2
 from keras.optimizers import SGD
 from keras.wrappers.scikit_learn import KerasClassifier
 from keras.models import Sequential
 from keras.layers import Dropout, Dense
 from sklearn.svm import SVC
 import multiprocessing
-
-# multithreading
-num_cores = str(multiprocessing.cpu_count())
-os.environ['OMP_NUM_THREADS'] = num_cores
-os.environ['GOTO_NUM_THREADS'] = num_cores
-os.environ['OPENBLAS_NUM_THREADS'] = num_cores
+import matplotlib.pyplot as plt
+from sklearn.ensemble import BaggingClassifier
 
 # PART 1 - LOADING THE DATA AND FEATURE EXTRACTION
 # Load the data
@@ -55,6 +51,7 @@ data['provided description'] = data.iloc[:, 19].isnull()
 # b) they won't be too informative
 # Here, for simplicity and computational efficiency, I drop all columns with > 51 unique values
 # (I chose 51 to preserve the state variable as I expect it to be important due to legal differences)
+print("Printing number of categories in each variable to see which one I can make dummies of")
 for column in data.select_dtypes(include=['object', 'category']):
     print(column, data[column].unique().shape, data[column].dtype)  # check the number of categories in each field...
     if data[column].unique().shape[0] > 51:  # ...and if there are too many...
@@ -102,21 +99,59 @@ x_train, x_test, y_train, y_test = train_test_split(data, y, test_size=0.3, stra
 xgb_model = xgb.XGBClassifier()
 xgb_model.fit(x_train, y_train)
 xgb_pred = xgb_model.predict(x_test)
+xgb_proba = xgb_model.predict_proba(x_test)
 
-print("The AUC of the ROC of the XGB model is {}".format(round(roc_auc_score(y_test, xgb_pred), 2)))
+print("The AUC of the ROC of the XGB model is {}".format(round(roc_auc_score(y_test, xgb_proba[:, 1]), 2)))
 print("The precision of the XGB model is {}".format(round(precision_score(y_test, xgb_pred), 2)))
 print("The recall of the XGB model is {}".format(round(recall_score(y_test, xgb_pred), 2)))
+xgb_roc = roc_curve(y_test, xgb_proba[:, 1])
+
+plt.figure()
+lw = 2
+plt.plot(xgb_roc[0], xgb_roc[1], color='darkorange',
+         lw=lw, label='XGB ROC curve (area = %0.2f)' % roc_auc_score(y_test, xgb_proba[:, 1]))
+plt.plot([0, 1], [0, 1], color='navy', lw=lw, linestyle='--')
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('Receiver operating characteristic example')
+plt.legend(loc="lower right")
+plt.show()
 
 # We can, however, try different ones as well.
-# In particular, one typical choice would be to check SVMs (it's super slow though):
-svm_model = SVC()
-svm_model.fit(x_train, y_train)
-svm_pred = svm_model.predict(x_test)
-print("The AUC of the ROC of the SVM model is {}".format(round(roc_auc_score(y_test, svm_pred), 2)))
+# In particular, one typical choice would be to check SVMs (it's super slow though)
+# To make it faster (and perhaps more robust) I use a bagging classifier and only use the first 27 features
+# (after that, all features have near 0 importance according to XGB)
+svm_model = BaggingClassifier(SVC(), n_estimators=10, max_samples=0.1, n_jobs=2)
+svm_model.fit(x_train[:, :27], y_train)
+svm_pred = svm_model.predict(x_test[:, :27])
+svm_proba = svm_model.predict_proba(x_test[:, :27])
+print("The AUC of the ROC of the SVM model is {}".format(round(roc_auc_score(y_test, svm_proba[:, 1]), 2)))
 print("The precision of the SVM model is {}".format(round(precision_score(y_test, svm_pred), 2)))
 print("The recall of the SVM model is {}".format(round(recall_score(y_test, svm_pred), 2)))
+svm_roc = roc_curve(y_test, svm_proba[:, 1])
+
+plt.figure()
+lw = 2
+plt.plot(svm_roc[0], svm_roc[1], color='darkorange',
+         lw=lw, label='SVM ROC curve (area = %0.2f)' % roc_auc_score(y_test, svm_proba[:, 1]))
+plt.plot([0, 1], [0, 1], color='navy', lw=lw, linestyle='--')
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('Receiver operating characteristic example')
+plt.legend(loc="lower right")
+plt.show()
 
 # We can also try deep learning (very slow as well):
+# multithreading
+num_cores = str(multiprocessing.cpu_count())
+os.environ['OMP_NUM_THREADS'] = num_cores
+os.environ['GOTO_NUM_THREADS'] = num_cores
+os.environ['OPENBLAS_NUM_THREADS'] = num_cores
+
 no_regressors = data.shape[1]
 
 
@@ -124,9 +159,9 @@ def create_spec_model():
     # create model
     model = Sequential()
     model.add(Dropout(0.2, input_shape=(no_regressors,)))
-    model.add(Dense(200, init='normal', activation='relu', W_constraint=maxnorm(2), W_regularizer=l1l2(l1=0, l2=1e-4)))
+    model.add(Dense(200, init='normal', activation='relu', W_constraint=maxnorm(2), W_regularizer=l1_l2(l1=0, l2=1e-4)))
     model.add(Dropout(0.2))
-    model.add(Dense(120, init='normal', activation='relu', W_constraint=maxnorm(2), W_regularizer=l1l2(l1=0, l2=1e-4)))
+    model.add(Dense(120, init='normal', activation='relu', W_constraint=maxnorm(2), W_regularizer=l1_l2(l1=0, l2=1e-4)))
     model.add(Dropout(0.2))
     model.add(Dense(1, init='normal', activation='sigmoid'))
     # Compile model
@@ -143,10 +178,25 @@ modelCheck = keras.callbacks.ModelCheckpoint('model_deepn', monitor='val_accurac
 deepnc = KerasClassifier(build_fn=create_spec_model, validation_split=0.2, batch_size=100, nb_epoch=40)
 deepnc.fit(np.array(x_train), np.array(y_train))
 deepn_pred = deepnc.predict(np.array(y_test))
-print("The AUC of the ROC of the Deep Learning model is {}".format(round(roc_auc_score(y_test, deepn_pred), 2)))
+deepn_proba = deepnc.predict_proba(np.array(y_test))
+print("The AUC of the ROC of the Deep Learning model is {}".format(round(roc_auc_score(y_test, deepn_proba[:, 1]), 2)))
 print("The precision of the Deep Learning model is {}".format(round(precision_score(y_test, deepn_pred), 2)))
 print("The recall of the Deep Learning model is {}".format(round(recall_score(y_test, deepn_pred), 2)))
 
+deepn_roc = roc_curve(y_test, deepn_proba[:, 1])
+
+plt.figure()
+lw = 2
+plt.plot(deepn_roc[0], deepn_roc[1], color='darkorange',
+         lw=lw, label='DL ROC curve (area = %0.2f)' % roc_auc_score(y_test, deepn_proba[:, 1]))
+plt.plot([0, 1], [0, 1], color='navy', lw=lw, linestyle='--')
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('Receiver operating characteristic example')
+plt.legend(loc="lower right")
+plt.show()
 
 # As expected, XGB had the best performance
 
